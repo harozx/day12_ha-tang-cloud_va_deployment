@@ -17,9 +17,11 @@ Không cần server config. Kết nối GitHub → Auto deploy.
 ```
 railway/
 ├── railway.toml        # Railway config
-├── Procfile            # Define start command
+├── Procfile            # Define start command (fallback)
 ├── app.py              # Agent (Railway-ready)
-└── requirements.txt
+├── requirements.txt
+└── utils/
+    └── mock_llm.py     # Mock LLM (shared)
 ```
 
 ### Các bước deploy Railway:
@@ -37,7 +39,10 @@ railway/
 ```
 render/
 ├── render.yaml         # Khai báo service, env vars, disk
-└── app.py
+├── app.py              # Agent (Render-ready)
+├── requirements.txt
+└── utils/
+    └── mock_llm.py     # Mock LLM (shared)
 ```
 
 ---
