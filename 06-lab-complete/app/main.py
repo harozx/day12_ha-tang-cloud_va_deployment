@@ -49,52 +49,25 @@ _request_count = 0
 _error_count = 0
 
 # ─────────────────────────────────────────────────────────
-# Simple In-memory Rate Limiter
+# Redis Connection
 # ─────────────────────────────────────────────────────────
-_rate_windows: dict[str, deque] = defaultdict(deque)
+USE_REDIS = False
+_redis = None
 
-def check_rate_limit(key: str):
-    now = time.time()
-    window = _rate_windows[key]
-    while window and window[0] < now - 60:
-        window.popleft()
-    if len(window) >= settings.rate_limit_per_minute:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded: {settings.rate_limit_per_minute} req/min",
-            headers={"Retry-After": "60"},
-        )
-    window.append(now)
+if settings.redis_url:
+    try:
+        import redis
+        _redis = redis.from_url(settings.redis_url, decode_responses=True)
+        _redis.ping()
+        USE_REDIS = True
+        logger.info(json.dumps({"event": "redis_connected", "url": settings.redis_url}))
+    except Exception as e:
+        logger.warning(json.dumps({"event": "redis_connection_failed", "error": str(e)}))
 
-# ─────────────────────────────────────────────────────────
-# Simple Cost Guard
-# ─────────────────────────────────────────────────────────
-_daily_cost = 0.0
-_cost_reset_day = time.strftime("%Y-%m-%d")
-
-def check_and_record_cost(input_tokens: int, output_tokens: int):
-    global _daily_cost, _cost_reset_day
-    today = time.strftime("%Y-%m-%d")
-    if today != _cost_reset_day:
-        _daily_cost = 0.0
-        _cost_reset_day = today
-    if _daily_cost >= settings.daily_budget_usd:
-        raise HTTPException(503, "Daily budget exhausted. Try tomorrow.")
-    cost = (input_tokens / 1000) * 0.00015 + (output_tokens / 1000) * 0.0006
-    _daily_cost += cost
-
-# ─────────────────────────────────────────────────────────
-# Auth
-# ─────────────────────────────────────────────────────────
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-def verify_api_key(api_key: str = Security(api_key_header)) -> str:
-    if not api_key or api_key != settings.agent_api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API key. Include header: X-API-Key: <key>",
-        )
-    return api_key
+# Import rate limiting, cost protection and auth functions
+from app.auth import verify_api_key
+from app.rate_limiter import check_rate_limit
+from app.cost_guard import check_and_record_cost, get_daily_cost
 
 # ─────────────────────────────────────────────────────────
 # Lifespan
@@ -232,6 +205,14 @@ def health():
     """Liveness probe. Platform restarts container if this fails."""
     status = "ok"
     checks = {"llm": "mock" if not settings.openai_api_key else "openai"}
+    if USE_REDIS:
+        try:
+            _redis.ping()
+            checks["redis"] = "connected"
+        except Exception as e:
+            checks["redis"] = f"error: {str(e)}"
+            status = "degraded"
+    
     return {
         "status": status,
         "version": settings.app_version,
@@ -248,19 +229,26 @@ def ready():
     """Readiness probe. Load balancer stops routing here if not ready."""
     if not _is_ready:
         raise HTTPException(503, "Not ready")
+    if USE_REDIS:
+        try:
+            _redis.ping()
+        except Exception:
+            raise HTTPException(503, "Redis not available")
     return {"ready": True}
 
 
 @app.get("/metrics", tags=["Operations"])
 def metrics(_key: str = Depends(verify_api_key)):
     """Basic metrics (protected)."""
+    daily_cost = get_daily_cost()
+
     return {
         "uptime_seconds": round(time.time() - START_TIME, 1),
         "total_requests": _request_count,
         "error_count": _error_count,
-        "daily_cost_usd": round(_daily_cost, 4),
+        "daily_cost_usd": round(daily_cost, 4),
         "daily_budget_usd": settings.daily_budget_usd,
-        "budget_used_pct": round(_daily_cost / settings.daily_budget_usd * 100, 1),
+        "budget_used_pct": round(daily_cost / settings.daily_budget_usd * 100, 1),
     }
 
 
