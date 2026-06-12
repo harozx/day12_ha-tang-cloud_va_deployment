@@ -51,7 +51,7 @@ Sau khi build thử cả 2 phiên bản image:
 ## Part 3: Cloud Deployment
 
 ### Exercise 3.1: Railway deployment
-- **Public URL:** `https://day12-production-agent.up.railway.app` *(mẫu)*
+- **Public URL:** `https://day12-agent-production-6443.up.railway.app` (active deployment)
 - **Cách thực hiện:**
   1. Cài đặt Railway CLI qua npm: `npm i -g @railway/cli`.
   2. Đăng nhập: `railway login`.
